@@ -19,6 +19,7 @@ import org.apache.kafka.clients.consumer.OffsetAndMetadata;
 import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.connect.errors.ConnectException;
 import org.apache.kafka.connect.errors.RetriableException;
+import org.apache.kafka.connect.sink.ErrantRecordReporter;
 import org.apache.kafka.connect.sink.SinkRecord;
 import org.apache.kafka.connect.sink.SinkTask;
 import org.slf4j.Logger;
@@ -38,6 +39,7 @@ public class JdbcSinkTask extends SinkTask {
   JdbcSinkConfig config;
   JdbcDbWriter writer;
   int remainingRetries;
+  ErrantRecordReporter reporter;
 
   @Override
   public void start(final Map<String, String> props) {
@@ -45,6 +47,13 @@ public class JdbcSinkTask extends SinkTask {
     config = new JdbcSinkConfig(props);
     initWriter();
     remainingRetries = config.maxRetries;
+
+    try {
+      reporter = context.errantRecordReporter(); // may be null if DLQ not enabled
+    } catch (NoSuchMethodError | NoClassDefFoundError e) {
+      // Will occur in Connect runtimes earlier than 2.6
+      reporter = null;
+    }
   }
 
   void initWriter() {
@@ -93,6 +102,16 @@ public class JdbcSinkTask extends SinkTask {
         remainingRetries--;
         context.timeout(config.retryBackoffMs);
         throw new RetriableException(sqlAllMessagesException);
+      }
+    } catch (SendToDLQException stde) {
+      if (remainingRetries == 0) {
+        reporter.report(stde.getRecord(), stde.getThrowable());
+      } else {
+        writer.closeQuietly();
+        initWriter();
+        remainingRetries--;
+        context.timeout(config.retryBackoffMs);
+        throw new RetriableException(stde.getThrowable());
       }
     }
     remainingRetries = config.maxRetries;

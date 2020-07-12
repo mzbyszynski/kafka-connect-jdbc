@@ -176,10 +176,14 @@ public class BufferedRecords {
     }
     log.debug("Flushing {} buffered records", records.size());
     for (SinkRecord record : records) {
-      if (isNull(record.value()) && nonNull(deleteStatementBinder)) {
-        deleteStatementBinder.bindRecord(record);
-      } else {
-        updateStatementBinder.bindRecord(record);
+      try {
+        if (isNull(record.value()) && nonNull(deleteStatementBinder)) {
+          deleteStatementBinder.bindRecord(record);
+        } else {
+          updateStatementBinder.bindRecord(record);
+        }
+      } catch (SQLException e) {
+        throw new SendToDLQException(e, record);
       }
     }
     Optional<Long> totalUpdateCount = executeUpdates();

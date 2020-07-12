@@ -15,6 +15,7 @@
 
 package io.confluent.connect.jdbc.sink;
 
+import static org.easymock.EasyMock.expect;
 import static org.easymock.EasyMock.expectLastCall;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
@@ -39,6 +40,7 @@ import org.apache.kafka.connect.data.Struct;
 import org.apache.kafka.connect.data.Timestamp;
 import org.apache.kafka.connect.errors.ConnectException;
 import org.apache.kafka.connect.errors.RetriableException;
+import org.apache.kafka.connect.sink.ErrantRecordReporter;
 import org.apache.kafka.connect.sink.SinkRecord;
 import org.apache.kafka.connect.sink.SinkTaskContext;
 import org.easymock.EasyMockSupport;
@@ -240,6 +242,7 @@ public class JdbcSinkTaskTest extends EasyMockSupport {
     props.put(JdbcSinkConfig.CONNECTION_URL, "stub");
     props.put(JdbcSinkConfig.MAX_RETRIES, String.valueOf(maxRetries));
     props.put(JdbcSinkConfig.RETRY_BACKOFF_MS, String.valueOf(retryBackoffMs));
+    expect(ctx.errantRecordReporter()).andReturn(createMock(ErrantRecordReporter.class));
     task.start(props);
 
     replayAll();
