@@ -169,12 +169,14 @@ public class BufferedRecords {
     return flushed;
   }
 
-  public List<SinkRecord> flush() throws SQLException {
+  public List<SinkRecord> flush() {
     if (records.isEmpty()) {
       log.debug("Records is empty");
       return new ArrayList<>();
     }
     log.debug("Flushing {} buffered records", records.size());
+    List<ErrantRecord> errors = new ArrayList<>();
+    List<SinkRecord> boundRecords = new ArrayList<>();
     for (SinkRecord record : records) {
       try {
         if (isNull(record.value()) && nonNull(deleteStatementBinder)) {
@@ -182,31 +184,41 @@ public class BufferedRecords {
         } else {
           updateStatementBinder.bindRecord(record);
         }
+        boundRecords.add(record);
       } catch (SQLException e) {
-        throw new SendToDLQException(e, record);
+        log.error("SQLException caught, sending to DLQ", e);
+        errors.add(new ErrantRecord(record, e));
       }
     }
-    Optional<Long> totalUpdateCount = executeUpdates();
-    long totalDeleteCount = executeDeletes();
 
-    final long expectedCount = updateRecordCount();
-    log.trace("{} records:{} resulting in totalUpdateCount:{} totalDeleteCount:{}",
-        config.insertMode, records.size(), totalUpdateCount, totalDeleteCount
-    );
-    if (totalUpdateCount.filter(total -> total != expectedCount).isPresent()
-        && config.insertMode == INSERT) {
-      throw new ConnectException(String.format(
-          "Update count (%d) did not sum up to total number of records inserted (%d)",
-          totalUpdateCount.get(),
-          expectedCount
-      ));
-    }
-    if (!totalUpdateCount.isPresent()) {
-      log.info(
-          "{} records:{} , but no count of the number of rows it affected is available",
-          config.insertMode,
-          records.size()
+    try {
+      Optional<Long> totalUpdateCount = executeUpdates();
+      long totalDeleteCount = executeDeletes();
+      final long expectedCount = updateRecordCount() - errors.size();
+      log.trace("{} records:{} resulting in totalUpdateCount:{} totalDeleteCount:{} errors: {}",
+              config.insertMode, records.size(), totalUpdateCount, totalDeleteCount, errors.size()
       );
+      if (totalUpdateCount.filter(total -> total != expectedCount).isPresent()
+              && config.insertMode == INSERT) {
+        throw new ConnectException(String.format(
+                "Update count (%d) did not sum up to total number of records inserted (%d)",
+                totalUpdateCount.get(),
+                expectedCount
+        ));
+      }
+      if (!totalUpdateCount.isPresent()) {
+        log.info(
+                "{} records:{} , but no count of the number of rows it affected is available",
+                config.insertMode,
+                records.size()
+        );
+      }
+    } catch (SQLException e) {
+      boundRecords.stream().forEach(r -> errors.add(new ErrantRecord(r, e)));
+    } finally {
+      if (errors.size() > 0) {
+        throw new SendToDlqException(errors);
+      }
     }
 
     final List<SinkRecord> flushedRecords = records;

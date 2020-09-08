@@ -52,6 +52,7 @@ public class JdbcSinkTask extends SinkTask {
       reporter = context.errantRecordReporter(); // may be null if DLQ not enabled
     } catch (NoSuchMethodError | NoClassDefFoundError e) {
       // Will occur in Connect runtimes earlier than 2.6
+      log.warn("No Errant Reporter");
       reporter = null;
     }
   }
@@ -103,15 +104,23 @@ public class JdbcSinkTask extends SinkTask {
         context.timeout(config.retryBackoffMs);
         throw new RetriableException(sqlAllMessagesException);
       }
-    } catch (SendToDLQException stde) {
+    } catch (SendToDlqException stde) {
+      log.warn(
+              "Write of {} records failed, remainingRetries={}",
+              records.size(),
+              remainingRetries,
+              stde.getInitialError()
+      );
       if (remainingRetries == 0) {
-        reporter.report(stde.getRecord(), stde.getThrowable());
+        log.info("Reporting DLQ Exception");
+        stde.getErrantRecords().stream().forEach(
+            er -> reporter.report(er.getRecord(), er.getError()));
       } else {
         writer.closeQuietly();
         initWriter();
         remainingRetries--;
         context.timeout(config.retryBackoffMs);
-        throw new RetriableException(stde.getThrowable());
+        throw new RetriableException(stde.getInitialError());
       }
     }
     remainingRetries = config.maxRetries;
